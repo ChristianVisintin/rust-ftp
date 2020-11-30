@@ -9,7 +9,7 @@ use std::net::ToSocketAddrs;
 use regex::Regex;
 use chrono::{DateTime, Utc};
 use chrono::offset::TimeZone;
-#[cfg(feature = "secure")]
+#[cfg(feature = "openssl")]
 use openssl::ssl::{ SslContext, Ssl };
 use super::data_stream::DataStream;
 use super::status;
@@ -31,13 +31,13 @@ lazy_static! {
 #[derive(Debug)]
 pub struct FtpStream {
     reader: BufReader<DataStream>,
-    #[cfg(feature = "secure")]
+    #[cfg(feature = "openssl")]
     ssl_cfg: Option<SslContext>,
 }
 
 impl FtpStream {
     /// Creates an FTP Stream.
-    #[cfg(not(feature = "secure"))]
+    #[cfg(not(feature = "openssl"))]
     pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<FtpStream> {
         TcpStream::connect(addr)
             .map_err(|e| FtpError::ConnectionError(e))
@@ -51,7 +51,7 @@ impl FtpStream {
     }
     
     /// Creates an FTP Stream.
-    #[cfg(feature = "secure")]
+    #[cfg(feature = "openssl")]
     pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<FtpStream> {
         TcpStream::connect(addr)
             .map_err(|e| FtpError::ConnectionError(e))
@@ -86,7 +86,7 @@ impl FtpStream {
     /// let mut ftp_stream = FtpStream::connect("127.0.0.1:21").unwrap();
     /// let mut ftp_stream = ftp_stream.into_secure(ctx).unwrap();
     /// ```
-    #[cfg(feature = "secure")]
+    #[cfg(feature = "openssl")]
     pub fn into_secure(mut self, ssl_context: SslContext) -> Result<FtpStream> {
         // Ask the server to start securing data.
         self.write_str("AUTH TLS\r\n")?;
@@ -130,7 +130,7 @@ impl FtpStream {
     /// // Do all public things
     /// let _ = ftp_stream.quit();
     /// ```
-    #[cfg(feature = "secure")]
+    #[cfg(feature = "openssl")]
     pub fn into_insecure(mut self) -> Result<FtpStream> {
         // Ask the server to stop securing data
         self.write_str("CCC\r\n")?;
@@ -143,7 +143,7 @@ impl FtpStream {
     }
     
     /// Execute command which send data back in a separate stream
-    #[cfg(not(feature = "secure"))]
+    #[cfg(not(feature = "openssl"))]
     fn data_command(&mut self, cmd: &str) -> Result<DataStream> {
         self.pasv()
             .and_then(|addr| self.write_str(cmd).map(|_| addr))
@@ -153,7 +153,7 @@ impl FtpStream {
     }
 
     /// Execute command which send data back in a separate stream
-    #[cfg(feature = "secure")]
+    #[cfg(feature = "openssl")]
     fn data_command(&mut self, cmd: &str) -> Result<DataStream> {
         self.pasv()
             .and_then(|addr| self.write_str(cmd).map(|_| addr))

@@ -50,7 +50,7 @@
 extern crate regex;
 extern crate chrono;
 
-#[cfg(feature = "secure")]
+#[cfg(feature = "openssl")]
 pub extern crate openssl;
 
 mod ftp;
