@@ -1,5 +1,4 @@
-rust-ftp
-================
+# rust-ftp
 
 FTP client for Rust
 
@@ -24,7 +23,7 @@ In your `Cargo.toml`:
 # ...
 [dependencies]
 # ...
-ftp = { version = "3.0.1", features = ["secure"] }
+ftp = { version = "3.0.1", features = ["openssl"] }
 # ...
 [patch.crates-io]
 ftp = { git = "https://github.com/ChristianVisintin/rust-ftp" }
@@ -34,13 +33,20 @@ If I'll have enough time and the maintainer won't update the project, I might ev
 
 ## Installation
 
-FTPS support is disabled by default. To enable it `secure` should be activated in `Cargo.toml`.
+FTPS support is disabled by default. To enable it you have two different backends:
+
+- `rustls` should be activated in order to use rustls as backend (should be preferred over openssl)
+- `openssl` should be activated in order to use openssl as backend
+
 ```toml
 [dependencies]
-ftp = { version = "<version>", features = ["secure"] }
+ftp = { version = "<version>", features = ["rustls"] }
+# Or
+ftp = { version = "<version>", features = ["openssl"] }
 ```
 
 ## Usage
+
 ```rust
 extern crate ftp;
 
@@ -55,7 +61,7 @@ fn main() {
 
     // Get the current directory that the client will be reading from and writing to.
     println!("Current directory: {}", ftp_stream.pwd().unwrap());
-    
+
     // Change into a new directory, relative to the one we are currently in.
     let _ = ftp_stream.cwd("test_data").unwrap();
 
@@ -78,8 +84,8 @@ fn main() {
 
 Licensed under either of
 
- * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
- * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
 
@@ -98,13 +104,13 @@ the vsftpd server.
 
 To create the Docker image:
 
-```bash
+```sh
 docker build -t ftp-server tests
 ```
 
 To start the FTP server that is tested against:
 
-```bash
+```sh
 tests/ftp-server.sh
 ```
 
@@ -112,12 +118,13 @@ This script runs the `ftp-server` image in detached mode and starts the `vsftpd`
 
 Once you have an instance running, to run tests type:
 
-```bash
+```sh
 cargo test
 ```
 
 The following commands can be useful:
-```bash
+
+```sh
 # List running containers of ftp-server image
 # (to include stopped containers use -a option)
 docker ps --filter ancestor=ftp-server
