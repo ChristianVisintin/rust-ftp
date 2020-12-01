@@ -9,11 +9,17 @@ use std::net::ToSocketAddrs;
 use regex::Regex;
 use chrono::{DateTime, Utc};
 use chrono::offset::TimeZone;
-#[cfg(feature = "openssl")]
-use openssl::ssl::{ SslContext, Ssl };
 use super::data_stream::DataStream;
 use super::status;
 use super::types::{FileType, FtpError, Line, Result};
+#[cfg(feature = "openssl")]
+use openssl::ssl::{ SslContext, Ssl };
+#[cfg(feature = "rust-tls")]
+use rustls::{ClientConfig, ClientSession};
+#[cfg(feature = "rust-tls")]
+extern crate webpki;
+#[cfg(feature = "rust-tls")]
+extern crate webpki_roots;
 
 lazy_static! {
     // This regex extracts IP and Port details from PASV command response.
@@ -28,16 +34,17 @@ lazy_static! {
 }
 
 /// Stream to interface with the FTP server. This interface is only for the command stream.
-#[derive(Debug)]
 pub struct FtpStream {
     reader: BufReader<DataStream>,
     #[cfg(feature = "openssl")]
     ssl_cfg: Option<SslContext>,
+    #[cfg(feature = "rust-tls")]
+    ssl_cfg: Option<ClientSession>,
 }
 
 impl FtpStream {
     /// Creates an FTP Stream.
-    #[cfg(not(feature = "openssl"))]
+    #[cfg(not(any(feature = "openssl", feature = "rust-tls")))]
     pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<FtpStream> {
         TcpStream::connect(addr)
             .map_err(|e| FtpError::ConnectionError(e))
@@ -52,6 +59,20 @@ impl FtpStream {
     
     /// Creates an FTP Stream.
     #[cfg(feature = "openssl")]
+    pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<FtpStream> {
+        TcpStream::connect(addr)
+            .map_err(|e| FtpError::ConnectionError(e))
+            .and_then(|stream| {
+                let mut ftp_stream = FtpStream {
+                    reader: BufReader::new(DataStream::Tcp(stream)),
+                    ssl_cfg: None,
+                };
+                ftp_stream.read_response(status::READY)
+                    .map(|_| ftp_stream)
+            })
+    }
+
+    #[cfg(feature = "rust-tls")]
     pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<FtpStream> {
         TcpStream::connect(addr)
             .map_err(|e| FtpError::ConnectionError(e))
@@ -106,6 +127,52 @@ impl FtpStream {
         secured_ftp_tream.read_response(status::COMMAND_OK)?;
         Ok(secured_ftp_tream)
     }
+
+    /// Switch to a secure mode if possible, using a provided SSL configuration.
+    /// This method does nothing if the connect is already secured.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if the plain TCP connection cannot be switched to TLS mode.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,no_run
+    /// use std::path::Path;
+    /// use ftp::FtpStream;
+    /// use ftp::openssl::ssl::{ SslContext, SslMethod };
+    ///
+    /// // Create an SslContext with a custom cert.
+    /// let mut ctx = SslContext::builder(SslMethod::tls()).unwrap();
+    /// let _ = ctx.set_ca_file(Path::new("/path/to/a/cert.pem")).unwrap();
+    /// let ctx = ctx.build();
+    /// let mut ftp_stream = FtpStream::connect("127.0.0.1:21").unwrap();
+    /// let mut ftp_stream = ftp_stream.into_secure(ctx).unwrap();
+    /// ```
+    #[cfg(feature = "rust-tls")]
+    pub fn into_secure(mut self, addr: &str) -> Result<FtpStream> {
+        // Ask the server to start securing data.
+        self.write_str("AUTH TLS\r\n")?;
+        self.read_response(status::AUTH_OK)?;
+        let mut ssl_cfg = ClientConfig::new();
+        ssl_cfg.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        let rc_config  = std::sync::Arc::new(ssl_cfg);
+        let dns_name = webpki::DNSNameRef::try_from_ascii_str(addr).unwrap();
+        let mut ssl_context = rustls::ClientSession::new(&rc_config, dns_name);
+        let stream = rustls::Stream::new(&mut ssl_context, &mut self.reader.into_inner().into_tcp_stream()); // Create stream
+
+        let mut secured_ftp_tream = FtpStream {
+            reader: BufReader::new(DataStream::Ssl(stream)),
+            ssl_cfg: Some(ssl_context),
+        };
+        // Set protection buffer size
+        secured_ftp_tream.write_str("PBSZ 0\r\n")?;
+        secured_ftp_tream.read_response(status::COMMAND_OK)?;
+        // Change the level of data protectio to Private
+        secured_ftp_tream.write_str("PROT P\r\n")?;
+        secured_ftp_tream.read_response(status::COMMAND_OK)?;
+        Ok(secured_ftp_tream)
+    }
     
     /// Switch to insecure mode. If the connection is already
     /// insecure does nothing.
@@ -141,9 +208,44 @@ impl FtpStream {
         };
         Ok(plain_ftp_stream)
     }
+
+    /// Switch to insecure mode. If the connection is already
+    /// insecure does nothing.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,no_run
+    /// use std::path::Path;
+    /// use ftp::FtpStream;
+    ///
+    /// use ftp::openssl::ssl::{ SslContext, SslMethod };
+    ///
+    /// // Create an SslContext with a custom cert.
+    /// let mut ctx = SslContext::builder(SslMethod::tls()).unwrap();
+    /// let _ = ctx.set_ca_file(Path::new("/path/to/a/cert.pem")).unwrap();
+    /// let ctx = ctx.build();
+    /// let mut ftp_stream = FtpStream::connect("127.0.0.1:21").unwrap();
+    /// let mut ftp_stream = ftp_stream.into_secure(ctx).unwrap();
+    /// // Do all secret things
+    /// // Switch back to the insecure mode
+    /// let mut ftp_stream = ftp_stream.into_insecure().unwrap();
+    /// // Do all public things
+    /// let _ = ftp_stream.quit();
+    /// ```
+    #[cfg(feature = "rust-tls")]
+    pub fn into_insecure(mut self) -> Result<FtpStream> {
+        // Ask the server to stop securing data
+        self.write_str("CCC\r\n")?;
+        self.read_response(status::COMMAND_OK)?;
+        let plain_ftp_stream = FtpStream {
+            reader: BufReader::new(DataStream::Tcp(self.reader.into_inner().into_tcp_stream())),
+            ssl_cfg: None,
+        };
+        Ok(plain_ftp_stream)
+    }
     
     /// Execute command which send data back in a separate stream
-    #[cfg(not(feature = "openssl"))]
+    #[cfg(not(any(feature = "openssl", feature = "rust-tls")))]
     fn data_command(&mut self, cmd: &str) -> Result<DataStream> {
         self.pasv()
             .and_then(|addr| self.write_str(cmd).map(|_| addr))
@@ -164,6 +266,22 @@ impl FtpStream {
                         Ssl::new(ssl).unwrap().connect(stream)
                             .map(|stream| DataStream::Ssl(stream))
                             .map_err(|e| FtpError::SecureError(format!("{}", e)))
+                    },
+                    None => Ok(DataStream::Tcp(stream))
+                }
+            })
+    }
+
+    /// Execute command which send data back in a separate stream
+    #[cfg(feature = "rust-tls")]
+    fn data_command(&mut self, cmd: &str) -> Result<DataStream> {
+        self.pasv()
+            .and_then(|addr| self.write_str(cmd).map(|_| addr))
+            .and_then(|addr| TcpStream::connect(addr).map_err(|e| FtpError::ConnectionError(e)))
+            .and_then(|stream| {
+                match self.ssl_cfg {
+                    Some(ref sslconf) => {
+                        Ok(DataStream::Ssl(rustls::Stream::new(&mut sslconf, &mut self.reader.into_inner().into_tcp_stream()))) // Create stream
                     },
                     None => Ok(DataStream::Tcp(stream))
                 }

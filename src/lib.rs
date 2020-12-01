@@ -52,6 +52,8 @@ extern crate chrono;
 
 #[cfg(feature = "openssl")]
 pub extern crate openssl;
+#[cfg(feature = "rust-tls")]
+pub extern crate rustls;
 
 mod ftp;
 mod data_stream;
